@@ -6,46 +6,40 @@
 
 ---
 
-## 引言：当 Agent 们各说各话
+## 引言：Agent 之间的墙
 
-想象这样一个场景。
+你在 WorkBuddy 里写完了后端 API。代码、测试、文档都在任务目录里，井井有条。
 
-你正在用 WorkBuddy 管理一个全栈项目。达芬奇🎨（前端）刚画完 UI 原型，你需要把它交给鲁班💻（后端）开始写 API。但问题是——达芬奇是 WorkBuddy 的 Agent，而鲁班在 Cursor 里干活。两者之间没有桥梁。你把达芬奇输出的设计稿复制粘贴到一个临时文件里，再手动告诉鲁班："从这里开始。"
+现在需要前端接入。你打开了 Cursor，新建了一个聊天，开始给里面的 AI 描述接口规范——字段类型、返回值结构、错误码含义。你一边翻着 WorkBuddy 里的输出文件，一边手动复制粘贴到 Cursor 的对话框。
 
-十分钟后，鲁班完成了 API，需要交给探照灯🔍（QA）写测试用例。探照灯在 Codex CLI 里运行。同样的复制粘贴，同样的上下文丢失，同样的手动同步。
+十分钟后你意识到，刚才复制的那个字段名好像不太对。回到 WorkBuddy 核对，再复制一次。
 
-这不是未来。这是现在每个多平台 AI 使用者每天都在重复的故事。
+这个场景你很熟悉。不是因为技术不够先进，而是因为**平台之间没有对话机制**。WorkBuddy 的 Agent 不知道 Cursor 里发生了什么，Cursor 的 Agent 也读不到 WorkBuddy 的文件上下文。每个平台都是一个孤岛。
 
-Agent 越来越聪明，但它们之间的"语言壁垒"越来越高。每个平台都在建造自己的高塔，塔与塔之间没有路。
-
-这就是**巴别塔困境**。
+巴别塔协议想解决的就是这个问题：**让不同平台上的 Agent 能够可靠地交接工作**。
 
 ![跨平台AI智能体各自孤立，无法互通](images/agents-convergence.png)
 
 ---
 
-## 核心洞察：回到最小公分母
+## 核心洞察：最小公分母
 
-解决跨平台通讯的方法很多。我们来看看常见的选择：
+跨平台通讯的方案很多，但都有前提条件：
 
-| 方案 | 依赖 | 问题 |
-|------|------|------|
-| HTTP API | 网络、服务发现 | 需要常驻服务，配置复杂 |
-| WebSocket | 长连接、协议栈 | 跨平台支持参差不齐 |
-| Message Queue | 中间件（Redis/RabbitMQ） | 引入外部系统，部署变重 |
-| **文件系统** | **无** | **任何 Agent 都能读写** |
+| 方案 | 前提 | 实际障碍 |
+|------|------|---------|
+| HTTP API | 需要服务发现和可用网络 | 不是每个环境都能起服务 |
+| WebSocket | 需要长连接和协议支持 | 跨平台实现参差不齐 |
+| Message Queue | 需要中间件 | Redis/RabbitMQ 不是随处都有 |
+| **文件系统** | **能执行代码就能读写** | **没有障碍** |
 
-我们想要的不是最优雅的方案，而是**最普适的方案**。
+文件系统是所有 Agent 的共同交集。无论你在什么平台，只要你能运行代码，你就能 `open()` 和 `write()`。不需要 SDK，不需要配置，不需要网络。
 
-文件系统有一个不可替代的特性：**它是所有 Agent 的共同交集**。无论你在 WorkBuddy、Claude Code、Codex CLI 还是 Cursor 里工作，你都能 `open()` 和 `write()`。不需要 SDK，不需要驱动，不需要网络。
-
-巴别塔协议选择 JSONL 文件作为消息总线。原因只有一个：**如果 Agent 能执行代码，它就能读写文件**。
+巴别塔选择 JSONL 文件作为消息总线，原因就这么简单。
 
 ---
 
-## 架构：两层 inbox 的设计哲学
-
-巴别塔的架构设计受到 Unix 哲学的启发：做一件事，做好一件事。
+## 架构：两层 inbox
 
 ```
 workspace/
@@ -56,26 +50,26 @@ workspace/
 │
 └── tasks/active/TASK-xxx/
     └── babel-tower/                # 任务级实例（运行时生成）
-        ├── manifest.yaml           # 团队成员注册表
+        ├── manifest.yaml           # 成员注册表
         ├── inbox/{agent}.jsonl     # 各成员收件箱
         └── .state.json             # 读取状态追踪
 ```
 
-### 为什么是两层？
+### 为什么是两层
 
-**Task-scoped inbox**：每个任务独立，上下文完全隔离。前端重构任务的消息不会污染后端 API 任务的收件箱。当任务完成归档时，整个通讯记录随之归档，历史可追溯。
+**Task-scoped inbox**：每个任务独立，上下文隔离。不同任务之间不会互相干扰，任务归档时通讯记录随之归档。
 
-**Global inbox**：跨任务广播，用于会话级调度。比如系统通知、紧急阻塞、或者调度者想广播一条"所有 Agent 检查收件箱"的消息。
+**Global inbox**：跨任务广播，用于需要全局知晓的通知，比如系统阻塞、紧急调度。
 
-这种分层设计的妙处在于——它模仿了人类团队协作的自然模式：项目群里聊项目，大群里发通知。
+这和日常工作里的逻辑一样：项目群聊项目的事，全员大群发通知。
 
 ![文件系统作为消息总线连接各平台](images/message-bus.png)
 
 ---
 
-## 消息协议：人类可读的 JSONL
+## 消息协议
 
-### 一条消息长什么样
+### 消息格式
 
 ```json
 {
@@ -92,9 +86,9 @@ workspace/
 }
 ```
 
-JSONL 意味着每条消息独占一行，用 `cat` 就能直接看，用 `grep` 就能搜索，用 `tail -f` 就能实时追踪。不需要专用客户端，不需要解析器。
+JSONL 格式的好处是直接可读：`cat` 查看，`grep` 搜索，`tail -f` 追踪。不需要专用工具。
 
-### 12 种消息类型
+### 消息类型
 
 | 类型 | 用途 |
 |------|------|
@@ -111,23 +105,21 @@ JSONL 意味着每条消息独占一行，用 `cat` 就能直接看，用 `grep`
 | `plan_resp` | 返回计划 |
 | `summary` | 生成会话摘要 |
 
-`handoff` 是最核心的类型——它代表一段工作的完整交接。从谁手里来，到谁手里去，带了什么产出，有什么需要注意的，一条消息说清楚。
+`handoff` 是最常用的类型——它把一段工作的产出、上下文、注意事项打包成一条消息，从一个人交给另一个人。
 
 ---
 
-## 握手协议：异步协作的艺术
+## 握手协议
 
-巴别塔不是实时通讯，而是**异步持久化协作**。消息写入文件后一直存在，接收方按需读取。
+巴别塔不是实时通讯，而是**异步持久化**。消息写入文件后一直存在，接收方随时读取。
 
-这里有一个关键洞察：**Agent 的工作天然是异步的**。达芬奇画 UI 可能需要 10 分钟，鲁班写 API 可能需要半小时。它们不需要实时对话，只需要可靠的交接机制。
+这个设计有一个隐含的合理性：Agent 的工作本来就是异步的。写 API 需要二十分钟，画 UI 需要半小时，不需要毫秒级的实时对话，只需要可靠的交接。
 
-### 四步握手流程
+### 四步握手
 
-想象这样一个协作场景：
+以一个实际的交接为例：后端完成了认证接口，需要交给前端集成。
 
-> 鲁班💻（后端 Agent）完成了用户认证模块。他需要把结果交给前端 Agent 达芬奇🎨继续。
-
-**第一步：鲁班发送交接消息**
+**第一步：发送消息**
 
 ```bash
 python babel-tower/scripts/babel-send.py \
@@ -137,38 +129,36 @@ python babel-tower/scripts/babel-send.py \
   --body "POST /auth/login implemented with JWT. Spec in deliverables/auth-api.yaml"
 ```
 
-消息被追加到达芬奇的 `inbox/frontend.jsonl` 文件中。
+消息被追加到前端的 `inbox/frontend.jsonl` 文件中。
 
 **第二步：消息持久化**
 
-JSONL 文件现在多了一行。即使达芬奇此刻不在线，消息也不会丢失。它就在那里，等着被读取。
+JSONL 文件多了一行。即使接收方此刻不在线，消息也不会丢失。
 
-**第三步：调度者轮询**
+**第三步：轮询检查**
 
-调度者（通常是用户或主控 Agent）每轮对话开始时运行：
+主控 Agent 或用户在每轮对话开始时运行：
 
 ```bash
 python babel-tower/scripts/babel-check.py \
   --task TASK-20260612-001 --all --unread
 ```
 
-输出显示："frontend 有 1 条未读消息，来自 backend，类型 handoff"。
+输出：`frontend 有 1 条未读消息，来自 backend，类型 handoff`。
 
-**第四步：唤醒达芬奇**
+**第四步：读取并继续**
 
-调度者通知达芬奇检查收件箱。达芬奇读取 JSONL，获取完整上下文——鲁班的产出、相关文件路径、注意事项——然后继续前端集成工作。
+前端 Agent 读取 inbox，获取完整的交接上下文——接口规范、文件位置、注意事项——然后继续工作。
 
-整个流程不需要 daemon、不需要 cron、不需要 WebSocket 长连接。调度者每轮对话开始时顺手检查一下 inbox，异步协作就自然发生了。
+不需要 daemon，不需要 cron，不需要长连接。每次对话开始时顺手检查一下 inbox 就行。
 
 ![异步握手协议四步流程](images/handshake-protocol.png)
 
 ---
 
-## 快速开始：一个下午跑通
+## 快速开始
 
-### 1. 初始化任务通讯
-
-为团队注册成员和收件箱：
+### 1. 初始化
 
 ```bash
 python babel-tower/scripts/babel-init.py \
@@ -177,22 +167,18 @@ python babel-tower/scripts/babel-init.py \
   --task-name "Auth refactor"
 ```
 
-这会为每个成员创建一个空的 JSONL 收件箱。
+为每个成员创建 JSONL 收件箱。
 
 ### 2. 发送消息
 
-任务内交接：
-
 ```bash
+# 任务内交接
 python babel-tower/scripts/babel-send.py \
   --task TASK-20260612-001 \
   --to frontend --type handoff \
   --subject "API ready" --body "Start UI integration"
-```
 
-全局通知：
-
-```bash
+# 全局通知
 python babel-tower/scripts/babel-send.py \
   --global --to orchestrator \
   --type query --subject "DB migration status"
@@ -201,87 +187,67 @@ python babel-tower/scripts/babel-send.py \
 ### 3. 检查收件箱
 
 ```bash
-# 查看任务内未读消息
 python babel-tower/scripts/babel-check.py \
   --task TASK-20260612-001 --all --unread
 
-# 查看全局通知
 python babel-tower/scripts/babel-check.py --global --all --unread
 ```
 
-### 4. 生成会话摘要
+### 4. 生成摘要
 
 ```bash
 python babel-tower/scripts/babel-summary.py --task TASK-20260612-001
 ```
 
-自动生成对话摘要，写入摘要文件，便于后续回顾和上下文恢复。
-
 ---
 
-## 跨平台集成：真正的 Universal
+## 跨平台集成
 
-巴别塔不绑定任何框架。接入方式简单到可笑：
+接入方式：
 
-| 平台 | 接入方式 |
-|------|---------|
+| 平台 | 方式 |
+|------|------|
 | **WorkBuddy** | 加载 `babel-tower` Skill |
 | **Claude Code** | 直接读写 inbox 文件 |
-| **Codex CLI** | 通过 Python 脚本调用 |
-| **Cursor** | 子 Agent 读取 JSONL |
+| **Codex CLI** | 调用 Python 脚本 |
+| **Cursor** | 读取 JSONL |
 | **任意工具** | `open()` + `write()` |
 
-这就是"最小公分母"的威力。不需要为每个平台写适配器，不需要处理协议差异。只要能操作文件，就能加入巴别塔网络。
+只要有文件 I/O，就能接入。不需要适配器，不需要协议转换。
 
 ![WorkBuddy作为中心枢纽连接各平台](images/workbuddy-hub.png)
 
 ---
 
-## 与 GEM 架构的融合
+## 与 Agent 系统集成
 
-巴别塔不是独立系统，而是 GEM 架构的**第 16 号基因（Gene 16: BabelComm）**。
+巴别塔可以嵌入到 Agent 的系统提示词（system prompt）中，让通讯成为 Agent 的默认行为。
 
-```
-Gene 13 (DevTeamAssemble) 触发团队组建
-        ↓
-自动初始化 babel-tower（任务级 inbox）
-        ↓
-Gene 16 (BabelComm) 激活通讯协议
-        ↓
-成员通过 inbox 异步协作
-```
+具体做法是在提示词中加入一条指令："每次会话开始时，检查 babel-tower inbox 中是否有未读消息。如果有，先处理消息再继续原有任务。"
 
-当 SOUL.md 注入 Gene 16 后，每个 Agent 在会话启动时自动检查 inbox。这意味着："上线即同步"——Agent 一醒来就知道有没有新任务、有没有交接消息、有没有紧急通知。
-
-巴别塔从外部工具变成了 Agent 的**内置通讯本能**。
+这样 Agent 一启动就自动同步状态，不需要人工提醒检查收件箱。通讯从外部工具变成了内置习惯。
 
 ---
 
-## 为什么不是 HTTP？不是 WebSocket？
-
-这个问题经常被问到。让我们诚实对比：
+## 为什么不是 HTTP/WebSocket？
 
 | 维度 | HTTP API | WebSocket | 巴别塔（文件系统）|
 |------|---------|-----------|------------------|
 | 依赖 | 需要服务 | 需要服务+长连接 | 零依赖 |
 | 持久化 | 需数据库 | 内存易失 | 文件即日志 |
-| 人类可读 | 需工具 | 需工具 | `cat` 直接看 |
+| 可读性 | 需工具 | 需工具 | `cat` 直接看 |
 | 跨平台 | 需 SDK | 需 SDK | 只要有文件系统 |
-| 调试 | 抓包/日志 | 抓帧 | 直接打开 JSONL |
+| 调试 | 抓包 | 抓帧 | 直接打开文件 |
 | 延迟 | 毫秒级 | 毫秒级 | 秒级（轮询）|
 
-**trade-off 很明确**：我们牺牲实时性，换取普适性和零依赖。
-
-但等等——Agent 任务的粒度通常是分钟级。前端写页面要 10 分钟，后端调 API 要 20 分钟，QA 写测试要 15 分钟。3-5 秒的轮询延迟在分钟级的工作流中完全可以忽略。
-
-我们不需要毫秒级的实时通讯。我们需要的是**可靠的交接**。
+Trade-off 是延迟。但 Agent 任务的粒度通常是分钟级，3-5 秒的轮询在分钟级工作流中完全可以接受。我们更需要的是**可靠的交接**，而不是实时的聊天。
 
 ---
 
-## 源码与协议
+## 源码
 
 - **协议规范**：`protocols/message-schema.json`
-- **核心脚本**：4 个 Python 文件，共 ~400 行，零第三方依赖
+- **核心脚本**：4 个 Python 文件，~400 行，零第三方依赖
 - **模板**：`templates/manifest.yaml`
 - **License**：MIT
 
@@ -291,20 +257,14 @@ git clone https://github.com/jafferchong/babel-tower-protocol.git
 
 ---
 
-## 结语：这一次，所有人说同一种话
+## 结语
 
-古老的巴别塔传说中，人类因为语言不通而无法建成通天塔。
+巴别塔协议的名字取自那个关于语言分化的古老传说。但今天的情况其实更简单——不是语言不同，而是平台之间没有对话的通道。
 
-今天的 AI 世界也在建造各自的高塔——WorkBuddy 的高塔、Claude 的高塔、Cursor 的高塔。每个塔都很宏伟，但塔与塔之间没有路。
+用文件系统做消息总线，用 JSONL 做通用格式，用 inbox 做交接机制。没有复杂的协议栈，没有额外的依赖，只要 Agent 能读写文件，就能加入协作。
 
-巴别塔协议想做的很简单：**给这些高塔之间铺一条路**。
-
-不是最华丽的路，不是最快的路，而是**任何人都能走的路**。用文件系统做消息总线，用 JSONL 做通用语，用 inbox 做邮局。
-
-当一个 WorkBuddy Agent 完成前端代码，一条 `handoff` 消息写入文件，Cursor 里的 Agent 读取后继续工作——没有复制粘贴，没有上下文丢失，没有平台壁垒。
-
-这就是巴别塔的愿景：**让 Agent 协作像发邮件一样简单**。
+这就是巴别塔协议的全部。
 
 ---
 
-*Built for cross-platform agent collaboration. Inspired by the original Tower of Babel — this time, everyone speaks the same language.*
+*MIT License. Built for practical cross-platform agent collaboration.*
